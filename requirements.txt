@@ -1,2 +1,2 @@
-pyTelegramBotAPI==4.23.0
-telethon==1.36.0
+telethon==1.42.0
+aiohttp
